@@ -1,105 +1,131 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const db = require("../config/conexion.js");
+const db = require('../config/conexion');
 
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = String(process.env.JWT_SECRET || 'fallback_secret_key');
 
-// Registro de usuario
-exports.register = (req, res) => {
-  let { username, password } = req.body;
-  username = username.trim();
-  if (!username || username.includes(' ')) {
-    return res.status(400).json({ error: 'El nombre de usuario no puede estar vacío ni contener espacios' });
-  }
-  bcrypt.hash(password, 10, (err, hashedPassword) => {
-    if (err) {
-      return res.status(500).json({ error: 'Error al hashear contraseña' });
+// ✅ Registrar usuario nuevo
+exports.register = async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'El nombre de usuario y la contraseña son obligatorios' });
     }
-    const sql = "INSERT INTO users (username, password_hash) VALUES (?, ?)";
-    db.query(sql, [username, hashedPassword], (err, result) => {
-      if (err) {
-        res.status(500).json({ error: 'Error al registrar usuario' });
-      } else {
-        res.status(201).json({ message: 'Usuario registrado' });
-      }
-    });
-  });
+
+    // Verificar si el usuario ya existe
+    const [existingUser] = await db.promise().query('SELECT * FROM users WHERE username = ?', [username]);
+    if (existingUser.length > 0) {
+      return res.status(409).json({ error: 'El usuario ya existe' });
+    }
+
+    // Encriptar contraseña
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Insertar usuario
+    await db.promise().query(
+      'INSERT INTO users (username, password_hash) VALUES (?, ?)',
+      [username, hashedPassword]
+    );
+
+    res.status(201).json({ message: 'Usuario registrado exitosamente' });
+  } catch (err) {
+    console.error('Error en register:', err);
+    res.status(500).json({ error: 'Error al registrar usuario' });
+  }
 };
 
-// Login
-exports.login = (req, res) => {
-  const { username, password } = req.body;
+// ✅ Iniciar sesión (login)
+exports.login = async (req, res) => {
+  try {
+    const { username, password } = req.body;
 
-  // Usuario de prueba local
-  if (username === 'admin' && password === 'admin') {
-    const token = jwt.sign({ id: 1, username: 'admin' }, JWT_SECRET, { expiresIn: '1h' });
-    return res.json({ token });
-  }
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
+    }
 
-  const sql = "SELECT * FROM users WHERE username = ?";
-  db.query(sql, [username], (err, results) => {
-    if (err) {
-      return res.status(500).json({ error: 'Error al iniciar sesión' });
-    }
-    if (results.length === 0) {
-      return res.status(401).json({ error: 'Usuario no encontrado' });
-    }
-    const user = results[0];
-    bcrypt.compare(password, user.password_hash, (err, isValid) => {
-      if (err) {
-        return res.status(500).json({ error: 'Error al verificar contraseña' });
-      }
-      if (!isValid) {
-        return res.status(401).json({ error: 'Contraseña incorrecta' });
-      }
-      const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '1h' });
-      res.json({ token });
-    });
-  });
-};
-
-// Update password
-exports.updatePassword = (req, res) => {
-  const { oldPassword, newPassword } = req.body;
-  const sqlSelect = "SELECT * FROM users WHERE username = ?";
-  db.query(sqlSelect, [req.user.username], (err, results) => {
-    if (err) {
-      return res.status(500).json({ error: 'Error al buscar usuario' });
-    }
-    if (results.length === 0) {
+    // Buscar usuario
+    const [users] = await db.promise().query('SELECT * FROM users WHERE username = ?', [username]);
+    if (users.length === 0) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
-    const user = results[0];
-    bcrypt.compare(oldPassword, user.password_hash, (err, isValid) => {
-      if (err) {
-        return res.status(500).json({ error: 'Error al verificar contraseña antigua' });
-      }
-      if (!isValid) {
-        return res.status(401).json({ error: 'Contraseña antigua incorrecta' });
-      }
-      bcrypt.hash(newPassword, 10, (err, hashedNewPassword) => {
-        if (err) {
-          return res.status(500).json({ error: 'Error al hashear nueva contraseña' });
-        }
-        const sqlUpdate = "UPDATE users SET password_hash = ?, fecha_modificacion = CURRENT_TIMESTAMP WHERE username = ?";
-        db.query(sqlUpdate, [hashedNewPassword, req.user.username], (err, result) => {
-          if (err) {
-            return res.status(500).json({ error: 'Error al actualizar contraseña' });
-          }
-          res.json({ message: 'Contraseña actualizada' });
-        });
-      });
-    });
+
+    const user = users[0];
+
+    // Validar contraseña
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Contraseña incorrecta' });
+    }
+
+    // Crear token JWT
+    const token = jwt.sign(
+      { id_user: user.id_user, username: user.username },
+      JWT_SECRET,
+      { expiresIn: '4h' }
+    );
+
+    res.json({ message: 'Login exitoso', token });
+} catch (err) {
+  console.error('🛑 Error en login:');
+  console.error('Mensaje:', err.message);
+  console.error('Stack:', err.stack);
+  console.error('JWT_SECRET (tipo):', typeof JWT_SECRET);
+  console.error('JWT_SECRET (valor inicial 10 chars):', JWT_SECRET ? JWT_SECRET.substring(0, 10) + '...' : 'undefined');
+  console.error('Usuario que intentó loguearse:', username);
+
+  return res.status(500).json({
+    error: 'Error interno al iniciar sesión',
+    detalles: 'Consulta el log del servidor para más información'
   });
+}
+
 };
 
-// Get users
-exports.getUsers = (req, res) => {
-  const sql = "SELECT id_user, username, fecha_creacion, fecha_modificacion FROM users";
-  db.query(sql, (err, results) => {
-    if (err) {
-      return res.status(500).json({ error: 'Error al obtener usuarios' });
+// ✅ Actualizar contraseña
+exports.updatePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    const userId = req.user.id_user;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: 'Debe ingresar la contraseña actual y la nueva' });
     }
-    res.json({ users: results });
-  });
+
+    // Buscar usuario
+    const [users] = await db.promise().query('SELECT * FROM users WHERE id_user = ?', [userId]);
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const user = users[0];
+
+    // Verificar contraseña actual
+    const validPassword = await bcrypt.compare(oldPassword, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Contraseña actual incorrecta' });
+    }
+
+    // Encriptar nueva contraseña
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Actualizar en DB
+    await db.promise().query('UPDATE users SET password_hash = ? WHERE id_user = ?', [hashedPassword, userId]);
+
+    res.json({ message: 'Contraseña actualizada correctamente' });
+  } catch (err) {
+    console.error('Error en updatePassword:', err);
+    res.status(500).json({ error: 'Error al actualizar la contraseña' });
+  }
+};
+
+// ✅ Obtener lista de usuarios (solo autenticados)
+exports.getUsers = async (req, res) => {
+  try {
+    const [users] = await db.promise().query('SELECT id_user, username, fecha_creacion, fecha_modificacion FROM users');
+    res.json(users);
+  } catch (err) {
+    console.error('Error en getUsers:', err);
+    res.status(500).json({ error: 'Error al obtener usuarios' });
+  }
 };

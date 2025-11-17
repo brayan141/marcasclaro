@@ -10,9 +10,30 @@ exports.getTexts = (req, res) => {
   });
 };
 
+exports.createText = (req, res) => {
+  const { name, content } = req.body;
+
+  if (!name || !content) {
+    return res.status(400).json({ error: 'El nombre y el contenido son obligatorios' });
+  }
+
+  const sql = "INSERT INTO texts (name, content) VALUES (?, ?)";
+  db.query(sql, [name, content], (err, result) => {
+    if (err) {
+      return res.status(500).json({ error: 'Error al crear texto' });
+    }
+    res.status(201).json({ message: 'Texto creado', id: result.insertId });
+  });
+};
+
 exports.updateText = (req, res) => {
   const { name } = req.params;
   const { content } = req.body;
+
+  if (!content) {
+    return res.status(400).json({ error: 'El contenido es obligatorio' });
+  }
+
   const sql = "UPDATE texts SET content = ? WHERE name = ?";
   db.query(sql, [content, name], (err, result) => {
     if (err) {
